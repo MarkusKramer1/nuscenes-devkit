@@ -28,6 +28,8 @@ from nuscenes.map_expansion.bitmap import BitMap
 from nuscenes.nuscenes import NuScenes
 from nuscenes.utils.geometry_utils import view_points
 
+import streamlit as st
+
 # Recommended style to use as the plots will show grids.
 plt.style.use('seaborn-whitegrid')
 
@@ -1242,6 +1244,7 @@ class NuScenesMapExplorer:
         assert len(scene_tokens_location) > 0, 'Error: Found 0 valid scenes for location %s!' % log_location
 
         map_poses = []
+        i = 0
         if verbose:
             print('Adding ego poses to map...')
         for scene_token in tqdm(scene_tokens_location, disable=not verbose):
@@ -1262,8 +1265,17 @@ class NuScenesMapExplorer:
             for sample_token in sample_tokens:
                 sample_record = nusc.get('sample', sample_token)
 
+                # get data of other objects
+                for annotation in sample_record['anns']:
+                    ann_data = nusc.get('sample_annotation', annotation)
+                    map_poses.append(ann_data['translation'])
+
                 # Poses are associated with the sample_data. Here we use the lidar sample_data.
                 sample_data_record = nusc.get('sample_data', sample_record['data']['LIDAR_TOP'])
+                if i == 0:
+                    st.write(sample_record)
+                    st.write(sample_data_record)
+                i += 1
                 pose_record = nusc.get('ego_pose', sample_data_record['ego_pose_token'])
 
                 # Calculate the pose on the map and append.

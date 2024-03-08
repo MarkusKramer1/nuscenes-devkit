@@ -29,7 +29,7 @@ from nuscenes.utils.data_io import load_bin_file, panoptic_to_lidarseg
 from nuscenes.utils.geometry_utils import view_points, box_in_image, BoxVisibility, transform_matrix
 from nuscenes.utils.map_mask import MapMask
 from nuscenes.utils.color_map import get_colormap
-
+import streamlit as st
 PYTHON_VERSION = sys.version_info[0]
 
 if not PYTHON_VERSION == 3:
@@ -506,8 +506,8 @@ class NuScenes:
     def list_attributes(self) -> None:
         self.explorer.list_attributes()
 
-    def list_scenes(self) -> None:
-        self.explorer.list_scenes()
+    def list_scenes(self) -> Tuple:
+        return self.explorer.list_scenes()
 
     def list_sample(self, sample_token: str) -> None:
         self.explorer.list_sample(sample_token)
@@ -539,8 +539,8 @@ class NuScenes:
                       filter_lidarseg_labels: List = None,
                       lidarseg_preds_bin_path: str = None,
                       verbose: bool = True,
-                      show_panoptic: bool = False) -> None:
-        self.explorer.render_sample(sample_token, box_vis_level, nsweeps=nsweeps, out_path=out_path,
+                      show_panoptic: bool = False):
+        return self.explorer.render_sample(sample_token, box_vis_level, nsweeps=nsweeps, out_path=out_path,
                                     show_lidarseg=show_lidarseg, filter_lidarseg_labels=filter_lidarseg_labels,
                                     lidarseg_preds_bin_path=lidarseg_preds_bin_path, verbose=verbose,
                                     show_panoptic=show_panoptic)
@@ -553,8 +553,8 @@ class NuScenes:
                            show_lidarseg_legend: bool = False,
                            filter_lidarseg_labels: List = None,
                            lidarseg_preds_bin_path: str = None, verbose: bool = True,
-                           show_panoptic: bool = False) -> None:
-        self.explorer.render_sample_data(sample_data_token, with_anns, box_vis_level, axes_limit, ax, nsweeps=nsweeps,
+                           show_panoptic: bool = False):
+        return self.explorer.render_sample_data(sample_data_token, with_anns, box_vis_level, axes_limit, ax, nsweeps=nsweeps,
                                          out_path=out_path,
                                          underlay_map=underlay_map,
                                          use_flat_vehicle_coordinates=use_flat_vehicle_coordinates,
@@ -568,7 +568,7 @@ class NuScenes:
     def render_annotation(self, sample_annotation_token: str, margin: float = 10, view: np.ndarray = np.eye(4),
                           box_vis_level: BoxVisibility = BoxVisibility.ANY, out_path: str = None,
                           extra_info: bool = False) -> None:
-        self.explorer.render_annotation(sample_annotation_token, margin, view, box_vis_level, out_path, extra_info)
+        return self.explorer.render_annotation(sample_annotation_token, margin, view, box_vis_level, out_path, extra_info)
 
     def render_instance(self, instance_token: str, margin: float = 10, view: np.ndarray = np.eye(4),
                         box_vis_level: BoxVisibility = BoxVisibility.ANY, out_path: str = None,
@@ -789,9 +789,8 @@ class NuScenesExplorer:
         for name, count in sorted(attribute_counts.items()):
             print('{}: {}'.format(name, count))
 
-    def list_scenes(self) -> None:
+    def list_scenes(self) -> Tuple:
         """ Lists all scenes with some meta data. """
-
         def ann_count(record):
             count = 0
             sample = self.nusc.get('sample', record['first_sample_token'])
@@ -803,19 +802,31 @@ class NuScenesExplorer:
         recs = [(self.nusc.get('sample', record['first_sample_token'])['timestamp'], record) for record in
                 self.nusc.scene]
 
+        ids = []
+        start_times = []
+        length_times = []
+        locations = []
+        descriptions = []
         for start_time, record in sorted(recs):
             start_time = self.nusc.get('sample', record['first_sample_token'])['timestamp'] / 1000000
             length_time = self.nusc.get('sample', record['last_sample_token'])['timestamp'] / 1000000 - start_time
             location = self.nusc.get('log', record['log_token'])['location']
-            desc = record['name'] + ', ' + record['description']
-            if len(desc) > 55:
-                desc = desc[:51] + "..."
-            if len(location) > 18:
-                location = location[:18]
+            desc = record['description']
+            id = record['name']
+            # if len(desc) > 55:
+            #     desc = desc[:51] + "..."
+            # if len(location) > 18:
+            #     location = location[:18]
+            start_times.append(datetime.utcfromtimestamp(start_time).strftime('%y-%m-%d %H:%M:%S'))
+            length_times.append(length_time)
+            locations.append(location)
+            descriptions.append(desc)
+            ids.append(id)
 
             print('{:16} [{}] {:4.0f}s, {}, #anns:{}'.format(
                 desc, datetime.utcfromtimestamp(start_time).strftime('%y-%m-%d %H:%M:%S'),
                 length_time, location, ann_count(record)))
+        return ids, start_times,length_times, locations, descriptions
 
     def list_sample(self, sample_token: str) -> None:
         """ Prints sample_data tokens and sample_annotation tokens related to the sample_token. """
@@ -1070,7 +1081,7 @@ class NuScenesExplorer:
                       filter_lidarseg_labels: List = None,
                       lidarseg_preds_bin_path: str = None,
                       verbose: bool = True,
-                      show_panoptic: bool = False) -> None:
+                      show_panoptic: bool = False):
         """
         Render all LIDAR and camera sample_data in sample along with annotations.
         :param token: Sample token.
@@ -1157,6 +1168,7 @@ class NuScenesExplorer:
 
         if verbose:
             plt.show()
+        return fig, ax
 
     def render_ego_centric_map(self,
                                sample_data_token: str,
@@ -1232,7 +1244,7 @@ class NuScenesExplorer:
                            filter_lidarseg_labels: List = None,
                            lidarseg_preds_bin_path: str = None,
                            verbose: bool = True,
-                           show_panoptic: bool = False) -> None:
+                           show_panoptic: bool = False):
         """
         Render sample data onto axis.
         :param sample_data_token: Sample_data token.
@@ -1331,7 +1343,7 @@ class NuScenesExplorer:
 
             # Init axes.
             if ax is None:
-                _, ax = plt.subplots(1, 1, figsize=(9, 9))
+                fig, ax = plt.subplots(1, 1, figsize=(9, 9))
 
             # Render map if requested.
             if underlay_map:
@@ -1469,6 +1481,7 @@ class NuScenesExplorer:
 
         if verbose:
             plt.show()
+        return ax
 
     def render_annotation(self,
                           anntoken: str,
@@ -1558,6 +1571,7 @@ class NuScenesExplorer:
 
         if out_path is not None:
             plt.savefig(out_path)
+        return fig, axes
 
     def render_instance(self,
                         instance_token: str,
@@ -1601,7 +1615,7 @@ class NuScenesExplorer:
         :param imsize: Size of image to render. The larger the slower this will run.
         :param out_path: Optional path to write a video file of the rendered frames.
         """
-
+        st.write('hi')
         assert imsize[0] / imsize[1] == 16 / 9, "Aspect ratio should be 16/9."
 
         if out_path is not None:
@@ -1626,9 +1640,9 @@ class NuScenesExplorer:
 
         time_step = 1 / freq * 1e6  # Time-stamps are measured in micro-seconds.
 
-        window_name = '{}'.format(scene_rec['name'])
-        cv2.namedWindow(window_name)
-        cv2.moveWindow(window_name, 0, 0)
+        # window_name = '{}'.format(scene_rec['name'])
+        # cv2.namedWindow(window_name)
+        # cv2.moveWindow(window_name, 0, 0)
 
         canvas = np.ones((2 * imsize[1], 3 * imsize[0], 3), np.uint8)
         if out_path is not None:
@@ -1686,18 +1700,19 @@ class NuScenesExplorer:
                     prev_recs[channel] = sd_rec  # Store here so we don't render the same image twice.
 
             # Show updated canvas.
-            cv2.imshow(window_name, canvas)
+            # cv2.imshow(window_name, canvas)
+
             if out_path is not None:
                 out.write(canvas)
 
-            key = cv2.waitKey(1)  # Wait a very short time (1 ms).
-
-            if key == 32:  # if space is pressed, pause.
-                key = cv2.waitKey()
-
-            if key == 27:  # if ESC is pressed, exit.
-                cv2.destroyAllWindows()
-                break
+            # key = cv2.waitKey(1)  # Wait a very short time (1 ms).
+            #
+            # if key == 32:  # if space is pressed, pause.
+            #     key = cv2.waitKey()
+            #
+            # if key == 27:  # if ESC is pressed, exit.
+            #     cv2.destroyAllWindows()
+            #     break
 
         cv2.destroyAllWindows()
         if out_path is not None:
@@ -1733,8 +1748,8 @@ class NuScenesExplorer:
 
         # Open CV init.
         name = '{}: {} (Space to pause, ESC to exit)'.format(scene_rec['name'], channel)
-        cv2.namedWindow(name)
-        cv2.moveWindow(name, 0, 0)
+        # cv2.namedWindow(name)
+        # cv2.moveWindow(name, 0, 0)
 
         if out_path is not None:
             fourcc = cv2.VideoWriter_fourcc(*'MJPG')
@@ -1759,24 +1774,24 @@ class NuScenesExplorer:
 
             # Render.
             im = cv2.resize(im, imsize)
-            cv2.imshow(name, im)
+            # cv2.imshow(name, im)
             if out_path is not None:
                 out.write(im)
 
-            key = cv2.waitKey(10)  # Images stored at approx 10 Hz, so wait 10 ms.
-            if key == 32:  # If space is pressed, pause.
-                key = cv2.waitKey()
-
-            if key == 27:  # If ESC is pressed, exit.
-                cv2.destroyAllWindows()
-                break
+            # key = cv2.waitKey(10)  # Images stored at approx 10 Hz, so wait 10 ms.
+            # if key == 32:  # If space is pressed, pause.
+            #     key = cv2.waitKey()
+            #
+            # if key == 27:  # If ESC is pressed, exit.
+            #     cv2.destroyAllWindows()
+            #     break
 
             if not sd_rec['next'] == "":
                 sd_rec = self.nusc.get('sample_data', sd_rec['next'])
             else:
                 has_more_frames = False
 
-        cv2.destroyAllWindows()
+        # cv2.destroyAllWindows()
         if out_path is not None:
             out.release()
 
