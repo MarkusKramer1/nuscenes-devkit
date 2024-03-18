@@ -7,7 +7,7 @@ import json
 import os
 import random
 from typing import Dict, List, Tuple, Optional, Union
-
+import glob
 import cv2
 import descartes
 import matplotlib.gridspec as gridspec
@@ -29,7 +29,8 @@ from nuscenes.nuscenes import NuScenes
 from nuscenes.utils.geometry_utils import view_points
 
 import streamlit as st
-
+import cv2
+from multiprocessing import Pool
 # Recommended style to use as the plots will show grids.
 plt.style.use('seaborn-whitegrid')
 
@@ -339,6 +340,62 @@ class NuScenesMap:
         :return: <np.float32: n, 2>. Returns a matrix with n ego poses in global map coordinates.
         """
         return self.explorer.render_egoposes_on_fancy_map(nusc, scene_tokens=scene_tokens,
+                                                          verbose=verbose, out_path=out_path,
+                                                          render_egoposes=render_egoposes,
+                                                          render_egoposes_range=render_egoposes_range,
+                                                          render_legend=render_legend, bitmap=bitmap)
+
+    def render_fancy_map_video(self,
+                                     nusc: NuScenes,
+                                     scene_token: str = None,
+                                     verbose: bool = True,
+                                     out_path: str = None,
+                                     render_egoposes: bool = True,
+                                     render_egoposes_range: bool = True,
+                                     render_legend: bool = True,
+                                     bitmap: Optional[BitMap] = None) -> Tuple[np.ndarray, Figure, Axes]:
+        """
+        Renders each ego pose of a list of scenes on the map (around 40 poses per scene).
+        This method is heavily inspired by NuScenes.render_egoposes_on_map(), but uses the map expansion pack maps.
+        :param nusc: The NuScenes instance to load the ego poses from.
+        :param scene_tokens: Optional list of scene tokens corresponding to the current map location.
+        :param verbose: Whether to show status messages and progress bar.
+        :param out_path: Optional path to save the rendered figure to disk.
+        :param render_egoposes: Whether to render ego poses.
+        :param render_egoposes_range: Whether to render a rectangle around all ego poses.
+        :param render_legend: Whether to render the legend of map layers.
+        :param bitmap: Optional BitMap object to render below the other map layers.
+        :return: <np.float32: n, 2>. Returns a matrix with n ego poses in global map coordinates.
+        """
+        return self.explorer.render_fancy_map_video(nusc, scene_token=scene_token,
+                                                          verbose=verbose, out_path=out_path,
+                                                          render_egoposes=render_egoposes,
+                                                          render_egoposes_range=render_egoposes_range,
+                                                          render_legend=render_legend, bitmap=bitmap)
+
+    def render_fancy_map_video2(self,
+                                     nusc: NuScenes,
+                                     scene_token: str = None,
+                                     verbose: bool = True,
+                                     out_path: str = None,
+                                     render_egoposes: bool = True,
+                                     render_egoposes_range: bool = True,
+                                     render_legend: bool = True,
+                                     bitmap: Optional[BitMap] = None) -> Tuple[np.ndarray, Figure, Axes]:
+        """
+        Renders each ego pose of a list of scenes on the map (around 40 poses per scene).
+        This method is heavily inspired by NuScenes.render_egoposes_on_map(), but uses the map expansion pack maps.
+        :param nusc: The NuScenes instance to load the ego poses from.
+        :param scene_tokens: Optional list of scene tokens corresponding to the current map location.
+        :param verbose: Whether to show status messages and progress bar.
+        :param out_path: Optional path to save the rendered figure to disk.
+        :param render_egoposes: Whether to render ego poses.
+        :param render_egoposes_range: Whether to render a rectangle around all ego poses.
+        :param render_legend: Whether to render the legend of map layers.
+        :param bitmap: Optional BitMap object to render below the other map layers.
+        :return: <np.float32: n, 2>. Returns a matrix with n ego poses in global map coordinates.
+        """
+        return self.explorer.render_fancy_map_video2(nusc, scene_token=scene_token,
                                                           verbose=verbose, out_path=out_path,
                                                           render_egoposes=render_egoposes,
                                                           render_egoposes_range=render_egoposes_range,
@@ -704,6 +761,8 @@ class NuScenesMapExplorer:
         self.canvas_max_y = self.map_api.canvas_edge[1]
         self.canvas_min_y = 0
         self.canvas_aspect_ratio = (self.canvas_max_x - self.canvas_min_x) / (self.canvas_max_y - self.canvas_min_y)
+        # self.nusc = None
+        # self.patch_size = (100,100)
 
     def render_centerlines(self,
                            resolution_meters: float,
@@ -1201,6 +1260,65 @@ class NuScenesMapExplorer:
 
         return fig, ax
 
+    def draw_vehicle_rectangles(self, ax, poses, orientations, vehicle_size, color):
+        half_length, half_width = vehicle_size[1] / 2, vehicle_size[0] / 2
+
+        for pose, yaw in zip(poses, orientations):
+            # Calculate the rectangle's corner points before rotation
+            corners = np.array([
+                [pose[0] - half_length, pose[1] - half_width],
+                [pose[0] + half_length, pose[1] - half_width],
+                [pose[0] + half_length, pose[1] + half_width],
+                [pose[0] - half_length, pose[1] + half_width]
+            ])
+
+            # Rotate corners
+            rot_matrix = np.array([
+                [np.cos(yaw), -np.sin(yaw)],
+                [np.sin(yaw), np.cos(yaw)]
+            ])
+            rotated_corners = np.dot(corners - pose[:2], rot_matrix.T) + pose[:2]
+
+            # Extract rotated corner points for rectangle creation
+            bottom_left_corner = rotated_corners[0]
+            rect_width = np.linalg.norm(rotated_corners[0] - rotated_corners[1])
+            rect_height = np.linalg.norm(rotated_corners[1] - rotated_corners[2])
+            angle = np.degrees(yaw)
+
+            # Create and add rectangle
+            rect = Rectangle(bottom_left_corner, rect_width, rect_height, angle=angle, linewidth=1, edgecolor=color,
+                             facecolor='none')
+            ax.add_patch(rect)
+
+    def draw_vehicle_rectangle(self, ax, pose, yaw, vehicle_size, color):
+        half_length, half_width = vehicle_size[1] / 2, vehicle_size[0] / 2
+
+        # Calculate the rectangle's corner points before rotation
+        corners = np.array([
+            [pose[0] - half_length, pose[1] - half_width],
+            [pose[0] + half_length, pose[1] - half_width],
+            [pose[0] + half_length, pose[1] + half_width],
+            [pose[0] - half_length, pose[1] + half_width]
+        ])
+
+        # Rotate corners
+        rot_matrix = np.array([
+            [np.cos(yaw), -np.sin(yaw)],
+            [np.sin(yaw), np.cos(yaw)]
+        ])
+        rotated_corners = np.dot(corners - pose[:2], rot_matrix.T) + pose[:2]
+
+        # Extract rotated corner points for rectangle creation
+        bottom_left_corner = rotated_corners[0]
+        rect_width = np.linalg.norm(rotated_corners[0] - rotated_corners[1])
+        rect_height = np.linalg.norm(rotated_corners[1] - rotated_corners[2])
+        angle = np.degrees(yaw)
+
+        # Create and add rectangle
+        rect = Rectangle(bottom_left_corner, rect_width, rect_height, angle=angle, linewidth=1, edgecolor=color,
+                         facecolor='none')
+        ax.add_patch(rect)
+
     def render_egoposes_on_fancy_map(self,
                                      nusc: NuScenes,
                                      scene_tokens: List = None,
@@ -1243,7 +1361,9 @@ class NuScenesMapExplorer:
             scene_tokens_location = [t for t in scene_tokens_location if t in scene_tokens]
         assert len(scene_tokens_location) > 0, 'Error: Found 0 valid scenes for location %s!' % log_location
 
-        map_poses = []
+        ego_map_poses = []
+        ego_map_orientation = []
+        objects = {}
         i = 0
         if verbose:
             print('Adding ego poses to map...')
@@ -1268,30 +1388,50 @@ class NuScenesMapExplorer:
                 # get data of other objects
                 for annotation in sample_record['anns']:
                     ann_data = nusc.get('sample_annotation', annotation)
-                    map_poses.append(ann_data['translation'])
+                    instance = ann_data['instance_token']
+                    if instance not in objects:
+                        objects[instance] = {
+                            'translation': [],
+                            'yaw': [],
+                            'size': [],
+                            'time': []
+                        }
+                    objects[instance]['translation'].append(ann_data['translation'])
+                    yaw = Quaternion(ann_data['rotation']).yaw_pitch_roll[0]
+                    objects[instance]['yaw'].append(yaw)
+                    objects[instance]['size'].append(ann_data['size'])
+
+                    # if i == 0:
+                    #     st.write(ann_data)
+                    # i += 1
 
                 # Poses are associated with the sample_data. Here we use the lidar sample_data.
                 sample_data_record = nusc.get('sample_data', sample_record['data']['LIDAR_TOP'])
-                if i == 0:
-                    st.write(sample_record)
-                    st.write(sample_data_record)
-                i += 1
+
                 pose_record = nusc.get('ego_pose', sample_data_record['ego_pose_token'])
-
+                yaw = Quaternion(pose_record['rotation']).yaw_pitch_roll[0]
+                # if i == 0:
+                #     st.write(sample_record)
+                #     st.write(sample_data_record)
+                #     st.write(pose_record)
+                # i += 1
                 # Calculate the pose on the map and append.
-                map_poses.append(pose_record['translation'])
+                ego_map_poses.append(pose_record['translation'])
+                ego_map_orientation.append(yaw)
 
+        ego_vehicle_size = [1.7, 4.1, 1.6]
         # Check that ego poses aren't empty.
-        assert len(map_poses) > 0, 'Error: Found 0 ego poses. Please check the inputs.'
+        assert len(ego_map_poses) > 0, 'Error: Found 0 ego poses. Please check the inputs.'
 
         # Compute number of close ego poses.
         if verbose:
             print('Creating plot...')
-        map_poses = np.vstack(map_poses)[:, :2]
+        ego_map_poses = np.vstack(ego_map_poses)[:, :2]
+
 
         # Render the map patch with the current ego poses.
-        min_patch = np.floor(map_poses.min(axis=0) - patch_margin)
-        max_patch = np.ceil(map_poses.max(axis=0) + patch_margin)
+        min_patch = np.floor(ego_map_poses.min(axis=0) - patch_margin)
+        max_patch = np.ceil(ego_map_poses.max(axis=0) + patch_margin)
         diff_patch = max_patch - min_patch
         if any(diff_patch < min_diff_patch):
             center_patch = (min_patch + max_patch) / 2
@@ -1299,6 +1439,7 @@ class NuScenesMapExplorer:
             min_patch = center_patch - diff_patch / 2
             max_patch = center_patch + diff_patch / 2
         my_patch = (min_patch[0], min_patch[1], max_patch[0], max_patch[1])
+        # st.write('Patch:', my_patch)
         fig, ax = self.render_map_patch(my_patch, self.map_api.non_geometric_layers, figsize=(10, 10),
                                         render_egoposes_range=render_egoposes_range,
                                         render_legend=render_legend, bitmap=bitmap)
@@ -1306,13 +1447,281 @@ class NuScenesMapExplorer:
         # Plot in the same axis as the map.
         # Make sure these are plotted "on top".
         if render_egoposes:
-            ax.scatter(map_poses[:, 0], map_poses[:, 1], s=20, c='k', alpha=1.0, zorder=2)
+            self.draw_vehicle_rectangles(ax, ego_map_poses, ego_map_orientation, ego_vehicle_size, 'r')
+            ax.scatter(ego_map_poses[:, 0], ego_map_poses[:, 1], s=20, c='k', alpha=1.0, zorder=2)
+
+        for obj in objects:
+
+            self.draw_vehicle_rectangles(ax, objects[obj]['translation'], objects[obj]['yaw'], objects[obj]['size'][0], 'b')
         plt.axis('off')
 
         if out_path is not None:
             plt.savefig(out_path, bbox_inches='tight', pad_inches=0)
 
-        return map_poses, fig, ax
+        return ego_map_poses, fig, ax
+
+    def render_fancy_map_video(self,
+                                     nusc: NuScenes,
+                                     scene_token: str = None,
+                                     verbose: bool = True,
+                                     out_path: str = None,
+                                     render_egoposes: bool = True,
+                                     render_egoposes_range: bool = True,
+                                     render_legend: bool = True,
+                                     bitmap: Optional[BitMap] = None) -> Tuple[np.ndarray, Figure, Axes]:
+        """
+        Renders BEV of traffic scene (uses the map expansion pack maps).
+        Note that the maps are constantly evolving, whereas we only released a single snapshot of the data.
+        Therefore for some scenes there is a bad fit between ego poses and maps.
+        :param nusc: The NuScenes instance to load the ego poses from.
+        :param scene_token: scene token corresponding to the current map location.
+        :param verbose: Whether to show status messages and progress bar.
+        :param out_path: Optional path to save the rendered figure to disk.
+        :param render_egoposes: Whether to render ego poses.
+        :param render_egoposes_range: Whether to render a rectangle around all ego poses.
+        :param render_legend: Whether to render the legend of map layers.
+        :param bitmap: Optional BitMap object to render below the other map layers.
+        :return: <np.float32: n, 2>. Returns a matrix with n ego poses in global map coordinates.
+        """
+        # Settings
+        patch_size = np.array([50,50])
+        patch_margin = 2
+        min_diff_patch = 30
+
+        # Ids of scenes with a bad match between localization and map.
+        scene_blacklist = [499, 515, 517]
+
+        # Get logs by location.
+        log_location = self.map_api.map_name
+        log_tokens = [log['token'] for log in nusc.log if log['location'] == log_location]
+        assert len(log_tokens) > 0, 'Error: This split has 0 scenes for location %s!' % log_location
+
+        # Filter scenes.
+        scene_tokens_location = [e['token'] for e in nusc.scene if e['log_token'] in log_tokens]
+        assert len(scene_tokens_location) > 0, 'Error: Found 0 valid scenes for location %s!' % log_location
+
+        ego_map_poses = []
+        ego_map_orientation = []
+
+        i = 0
+        if verbose:
+            print('Adding poses to map...')
+
+        # Check that the scene is from the correct location.
+        scene_record = nusc.get('scene', scene_token)
+        scene_name = scene_record['name']
+        scene_id = int(scene_name.replace('scene-', ''))
+        log_record = nusc.get('log', scene_record['log_token'])
+        assert log_record['location'] == log_location, \
+            'Error: The provided scene_tokens do not correspond to the provided map location!'
+
+        # Print a warning if the localization is known to be bad.
+        if verbose and scene_id in scene_blacklist:
+            print('Warning: %s is known to have a bad fit between ego pose and map.' % scene_name)
+
+        # For each sample in the scene, store the ego pose.
+        sample_tokens = nusc.field2token('sample', 'scene_token', scene_token)
+
+        frame_size = (1200, 780)  # Width, Height
+        fps = 10  # Frames per second
+        data = []
+        ego_vehicle_size = [1.7, 4.1, 1.6]
+
+        progress_bar = st.progress(0, text='Generating animation')
+        for i, sample_token in enumerate(sample_tokens):
+            progress_bar.progress(i/len(sample_tokens), text=f'Generating Image {i}/{len(sample_tokens)}')
+            sample_record = nusc.get('sample', sample_token)
+
+            # Poses are associated with the sample_data. Here we use the lidar sample_data.
+            sample_data_record = nusc.get('sample_data', sample_record['data']['LIDAR_TOP'])
+
+            ego_pose_record = nusc.get('ego_pose', sample_data_record['ego_pose_token'])
+            yaw = Quaternion(ego_pose_record['rotation']).yaw_pitch_roll[0]
+
+            # Calculate the pose on the map and append.
+            ego_pose = np.array(ego_pose_record['translation'][:2])
+
+            min_patch = ego_pose - patch_size
+            max_patch = ego_pose + patch_size
+            my_patch = (min_patch[0], min_patch[1], max_patch[0], max_patch[1])
+            fig, ax = self.render_map_patch(my_patch, self.map_api.non_geometric_layers, figsize=(10, 10),
+                                            render_egoposes_range=render_egoposes_range,
+                                            render_legend=render_legend, bitmap=bitmap)
+            self.draw_vehicle_rectangle(ax, ego_pose, yaw, ego_vehicle_size, 'r')
+
+            for annotation in sample_record['anns']:
+                ann_data = nusc.get('sample_annotation', annotation)
+                pose = ann_data['translation']
+                yaw = Quaternion(ann_data['rotation']).yaw_pitch_roll[0]
+                size = ann_data['size']
+                self.draw_vehicle_rectangle(ax, pose,yaw, size, 'b')
+
+            fig_path = os.path.join(out_path, f'frame_{i:02d}.png')
+            fig.savefig(fig_path)
+            # fig.canvas.draw()
+            # img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+            # img = img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+            # # Resize the image to the video frame size (optional)
+            # img = cv2.resize(img, frame_size)
+            #
+            # # Write the image to the video
+            # video.write(img)
+
+            # Close the figure to free memory
+            plt.close(fig)
+
+        video_path = os.path.join(out_path, 'output_video.avi')
+
+        # Gather all frame filenames
+        frame_path = os.path.join(out_path, 'frame_*.png')
+        frames = sorted(glob.glob(frame_path))
+
+        #st.write(frames)
+        progress_bar.progress(1.0, text=f'Rendering Video')
+        # Retrieve the dimensions of the first frame
+        frame = cv2.imread(frames[0])
+        height, width, layers = frame.shape
+
+        # Define the codec and create VideoWriter object
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # or use 'XVID' if mp4v doesn't work
+        video = cv2.VideoWriter(video_path, fourcc, 2.0, (width, height))
+
+        for frame in frames:
+            video.write(cv2.imread(frame))
+
+        video.release()
+
+
+        return 0,0,0
+
+    def render_fancy_map_video2(self,
+                                     nusc: NuScenes,
+                                     scene_token: str = None,
+                                     verbose: bool = True,
+                                     out_path: str = None,
+                                     render_egoposes: bool = True,
+                                     render_egoposes_range: bool = True,
+                                     render_legend: bool = True,
+                                     bitmap: Optional[BitMap] = None) -> Tuple[np.ndarray, Figure, Axes]:
+        """
+        Renders BEV of traffic scene (uses the map expansion pack maps).
+        Note that the maps are constantly evolving, whereas we only released a single snapshot of the data.
+        Therefore for some scenes there is a bad fit between ego poses and maps.
+        :param nusc: The NuScenes instance to load the ego poses from.
+        :param scene_token: scene token corresponding to the current map location.
+        :param verbose: Whether to show status messages and progress bar.
+        :param out_path: Optional path to save the rendered figure to disk.
+        :param render_egoposes: Whether to render ego poses.
+        :param render_egoposes_range: Whether to render a rectangle around all ego poses.
+        :param render_legend: Whether to render the legend of map layers.
+        :param bitmap: Optional BitMap object to render below the other map layers.
+        :return: <np.float32: n, 2>. Returns a matrix with n ego poses in global map coordinates.
+        """
+        # Settings
+        self.patch_size = np.array([50,50])
+        self.nusc = nusc
+        patch_margin = 2
+        min_diff_patch = 30
+
+        # Ids of scenes with a bad match between localization and map.
+        scene_blacklist = [499, 515, 517]
+
+        # Get logs by location.
+        log_location = self.map_api.map_name
+        log_tokens = [log['token'] for log in nusc.log if log['location'] == log_location]
+        assert len(log_tokens) > 0, 'Error: This split has 0 scenes for location %s!' % log_location
+
+        # Filter scenes.
+        scene_tokens_location = [e['token'] for e in nusc.scene if e['log_token'] in log_tokens]
+        assert len(scene_tokens_location) > 0, 'Error: Found 0 valid scenes for location %s!' % log_location
+
+        ego_map_poses = []
+        ego_map_orientation = []
+
+        i = 0
+        if verbose:
+            print('Adding poses to map...')
+
+        # Check that the scene is from the correct location.
+        scene_record = nusc.get('scene', scene_token)
+        scene_name = scene_record['name']
+        scene_id = int(scene_name.replace('scene-', ''))
+        log_record = nusc.get('log', scene_record['log_token'])
+        assert log_record['location'] == log_location, \
+            'Error: The provided scene_tokens do not correspond to the provided map location!'
+
+        # Print a warning if the localization is known to be bad.
+        if verbose and scene_id in scene_blacklist:
+            print('Warning: %s is known to have a bad fit between ego pose and map.' % scene_name)
+
+        # For each sample in the scene, store the ego pose.
+        sample_tokens = nusc.field2token('sample', 'scene_token', scene_token)
+
+        frame_size = (1000, 1000)  # Width, Height
+        fps = 10  # Frames per second
+        data = []
+        self.ego_vehicle_size = [1.7, 4.1, 1.6]
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # or use 'XVID' if mp4v doesn't work
+        video_path = os.path.join(out_path, 'output_video.avi')
+        video = cv2.VideoWriter(video_path, fourcc, 2.0, frame_size)
+        pool = Pool(processes=4)  # Adjust number of processes based on your system
+        images = pool.map(self.render_sample, sample_tokens)
+        for img in images:
+            # Directly write to video stream
+            video.write(img)
+        # progress_bar = st.progress(0, text='Generating animation')
+        # for i, sample_token in enumerate(sample_tokens):
+        #     progress_bar.progress(i/len(sample_tokens), text=f'Generating Image {i}/{len(sample_tokens)}')
+        #
+        #     # # Resize the image to the video frame size (optional)
+        #     # img = cv2.resize(img, frame_size)
+        #     #
+        #     # # Write the image to the video
+        #     video.write(img)
+        #
+        #     # Close the figure to free memory
+
+
+        video.release()
+
+
+        return 0,0,0
+
+
+    def render_sample(self, sample_token):
+        sample_record = self.nusc.get('sample', sample_token)
+
+        # Poses are associated with the sample_data. Here we use the lidar sample_data.
+        sample_data_record = self.nusc.get('sample_data', sample_record['data']['LIDAR_TOP'])
+
+        ego_pose_record = self.nusc.get('ego_pose', sample_data_record['ego_pose_token'])
+        yaw = Quaternion(ego_pose_record['rotation']).yaw_pitch_roll[0]
+
+        # Calculate the pose on the map and append.
+        ego_pose = np.array(ego_pose_record['translation'][:2])
+
+        min_patch = ego_pose - self.patch_size
+        max_patch = ego_pose + self.patch_size
+        my_patch = (min_patch[0], min_patch[1], max_patch[0], max_patch[1])
+        fig, ax = self.render_map_patch(my_patch, self.map_api.non_geometric_layers, figsize=(10, 10),
+                                        render_egoposes_range=True,
+                                        render_legend=True, bitmap=None)
+        self.draw_vehicle_rectangle(ax, ego_pose, yaw, self.ego_vehicle_size, 'r')
+
+        for annotation in sample_record['anns']:
+            ann_data = self.nusc.get('sample_annotation', annotation)
+            pose = ann_data['translation']
+            yaw = Quaternion(ann_data['rotation']).yaw_pitch_roll[0]
+            size = ann_data['size']
+            self.draw_vehicle_rectangle(ax, pose, yaw, size, 'b')
+
+        # fig_path = os.path.join(out_path, f'frame_{i:02d}.png')
+        # fig.savefig(fig_path)
+        fig.canvas.draw()
+        img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+        img = img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+        plt.close(fig)
+        return img
 
     def render_next_roads(self,
                           x: float,
