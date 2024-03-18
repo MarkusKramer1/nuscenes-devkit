@@ -163,7 +163,36 @@ class ConstantVelocityHeading(Baseline):
 
         # Need the prediction to have 2d.
         return Prediction(instance, sample, np.expand_dims(cv_heading, 0), np.array([1]))
+    
+class ConstantSpeedYawRate(Baseline):
+    """ Makes predictions according to constant speed and yaw rate model. """
 
+    def __call__(self, token: str) -> Prediction:
+        """
+        Makes prediction.
+        :param token: string of format {instance_token}_{sample_token}.
+        """
+        instance, sample = token.split("_")
+        kinematics = _kinematics_from_tokens(self.helper, instance, sample)
+        ctrv = _constant_speed_and_yaw_rate(kinematics, self.sec_from_now, self.sampled_at)
+
+        # Need the prediction to have 2d.
+        return Prediction(instance, sample, np.expand_dims(ctrv, 0), np.array([1]))
+
+class ConstantAccelerationHeading(Baseline):
+    """ Makes predictions according to constant acceleration and heading model. """
+
+    def __call__(self, token: str) -> Prediction:
+        """
+        Makes prediction.
+        :param token: string of format {instance_token}_{sample_token}.
+        """
+        instance, sample = token.split("_")
+        kinematics = _kinematics_from_tokens(self.helper, instance, sample)
+        ca_heading = _constant_acceleration_and_heading(kinematics, self.sec_from_now, self.sampled_at)
+
+        # Need the prediction to have 2d.
+        return Prediction(instance, sample, np.expand_dims(ca_heading, 0), np.array([1]))
 
 class PhysicsOracle(Baseline):
     """ Makes several physics-based predictions and picks the one closest to the ground truth. """

@@ -323,6 +323,7 @@ class NuScenesMap:
                                      verbose: bool = True,
                                      out_path: str = None,
                                      render_egoposes: bool = True,
+                                     pred_instances: List = [],
                                      render_egoposes_range: bool = True,
                                      render_legend: bool = True,
                                      bitmap: Optional[BitMap] = None) -> Tuple[np.ndarray, Figure, Axes]:
@@ -342,15 +343,52 @@ class NuScenesMap:
         return self.explorer.render_egoposes_on_fancy_map(nusc, scene_tokens=scene_tokens,
                                                           verbose=verbose, out_path=out_path,
                                                           render_egoposes=render_egoposes,
+                                                          pred_instances=pred_instances,
                                                           render_egoposes_range=render_egoposes_range,
                                                           render_legend=render_legend, bitmap=bitmap)
+
+    def render_prediction_on_map(self,
+                                     nusc: NuScenes,
+                                     sample_token: str = None,
+                                     pred_instance: str = None,
+                                     pred_nr: int = 0,
+                                     pred_trajectories: List = None,
+                                     ground_truth: np.ndarray = None,
+                                     render_egoposes_range: bool = True,
+                                     render_legend: bool = True,
+                                     bitmap: Optional[BitMap] = None) -> Tuple[np.ndarray, Figure, Axes]:
+        """
+        Renders each ego pose of a list of scenes on the map (around 40 poses per scene).
+        This method is heavily inspired by NuScenes.render_egoposes_on_map(), but uses the map expansion pack maps.
+        :param nusc: The NuScenes instance to load the ego poses from.
+        :param scene_tokens: Optional list of scene tokens corresponding to the current map location.
+        :param verbose: Whether to show status messages and progress bar.
+        :param out_path: Optional path to save the rendered figure to disk.
+        :param render_egoposes: Whether to render ego poses.
+        :param render_egoposes_range: Whether to render a rectangle around all ego poses.
+        :param render_legend: Whether to render the legend of map layers.
+        :param bitmap: Optional BitMap object to render below the other map layers.
+        :return: <np.float32: n, 2>. Returns a matrix with n ego poses in global map coordinates.
+        """
+        return self.explorer.render_prediction_on_map(nusc = nusc,
+                                     sample_token = sample_token,
+                                     pred_instance = pred_instance,
+                                     pred_nr = pred_nr,  
+                                     pred_trajectories=pred_trajectories,
+                                     ground_truth = ground_truth,
+                                     render_egoposes_range = render_egoposes_range,
+                                     render_legend = render_legend,
+                                     bitmap = bitmap)
+
 
     def render_fancy_map_video(self,
                                      nusc: NuScenes,
                                      scene_token: str = None,
                                      verbose: bool = True,
                                      out_path: str = None,
-                                     render_egoposes: bool = True,
+                                     pred_instances: List = [],
+                                     pred_annotations: List = [],
+                                     pred_nrs: dict = {},
                                      render_egoposes_range: bool = True,
                                      render_legend: bool = True,
                                      bitmap: Optional[BitMap] = None) -> Tuple[np.ndarray, Figure, Axes]:
@@ -369,7 +407,9 @@ class NuScenesMap:
         """
         return self.explorer.render_fancy_map_video(nusc, scene_token=scene_token,
                                                           verbose=verbose, out_path=out_path,
-                                                          render_egoposes=render_egoposes,
+                                                          pred_instances=pred_instances,
+                                                          pred_annotations=pred_annotations,
+                                                            pred_nrs=pred_nrs,
                                                           render_egoposes_range=render_egoposes_range,
                                                           render_legend=render_legend, bitmap=bitmap)
 
@@ -1290,7 +1330,7 @@ class NuScenesMapExplorer:
                              facecolor='none')
             ax.add_patch(rect)
 
-    def draw_vehicle_rectangle(self, ax, pose, yaw, vehicle_size, color):
+    def draw_vehicle_rectangle(self, ax, pose, yaw, vehicle_size, color, pred_nr=-1):
         half_length, half_width = vehicle_size[1] / 2, vehicle_size[0] / 2
 
         # Calculate the rectangle's corner points before rotation
@@ -1318,6 +1358,11 @@ class NuScenesMapExplorer:
         rect = Rectangle(bottom_left_corner, rect_width, rect_height, angle=angle, linewidth=1, edgecolor=color,
                          facecolor='none')
         ax.add_patch(rect)
+        if pred_nr != -1:
+            # Calculate the midpoint of the rectangle
+            midpoint = np.mean(rotated_corners, axis=0)
+            # Add text at the midpoint
+            ax.text(midpoint[0], midpoint[1], str(pred_nr), horizontalalignment='center', verticalalignment='center', color='red')
 
     def render_egoposes_on_fancy_map(self,
                                      nusc: NuScenes,
@@ -1325,6 +1370,7 @@ class NuScenesMapExplorer:
                                      verbose: bool = True,
                                      out_path: str = None,
                                      render_egoposes: bool = True,
+                                     pred_instances: List = None,    
                                      render_egoposes_range: bool = True,
                                      render_legend: bool = True,
                                      bitmap: Optional[BitMap] = None) -> Tuple[np.ndarray, Figure, Axes]:
@@ -1379,7 +1425,10 @@ class NuScenesMapExplorer:
             # Print a warning if the localization is known to be bad.
             if verbose and scene_id in scene_blacklist:
                 print('Warning: %s is known to have a bad fit between ego pose and map.' % scene_name)
-
+            min_x = 1e8
+            max_x = -1e8
+            min_y = 1e8
+            max_y = -1e8
             # For each sample in the scene, store the ego pose.
             sample_tokens = nusc.field2token('sample', 'scene_token', scene_token)
             for sample_token in sample_tokens:
@@ -1389,6 +1438,7 @@ class NuScenesMapExplorer:
                 for annotation in sample_record['anns']:
                     ann_data = nusc.get('sample_annotation', annotation)
                     instance = ann_data['instance_token']
+                    translation = ann_data['translation']
                     if instance not in objects:
                         objects[instance] = {
                             'translation': [],
@@ -1396,25 +1446,29 @@ class NuScenesMapExplorer:
                             'size': [],
                             'time': []
                         }
-                    objects[instance]['translation'].append(ann_data['translation'])
+                        if instance in pred_instances:
+                            objects[instance]['pred'] = True
+                        else:
+                            objects[instance]['pred'] = False
+                    objects[instance]['translation'].append(translation)
                     yaw = Quaternion(ann_data['rotation']).yaw_pitch_roll[0]
                     objects[instance]['yaw'].append(yaw)
                     objects[instance]['size'].append(ann_data['size'])
+                    if translation[0] < min_x:
+                        min_x = translation[0]
+                    if translation[0] > max_x:
+                        max_x = translation[0]
+                    if translation[1] < min_y:
+                        min_y = translation[1]
+                    if translation[1] > max_y:
+                        max_y = translation[1]
 
-                    # if i == 0:
-                    #     st.write(ann_data)
-                    # i += 1
 
                 # Poses are associated with the sample_data. Here we use the lidar sample_data.
                 sample_data_record = nusc.get('sample_data', sample_record['data']['LIDAR_TOP'])
 
                 pose_record = nusc.get('ego_pose', sample_data_record['ego_pose_token'])
                 yaw = Quaternion(pose_record['rotation']).yaw_pitch_roll[0]
-                # if i == 0:
-                #     st.write(sample_record)
-                #     st.write(sample_data_record)
-                #     st.write(pose_record)
-                # i += 1
                 # Calculate the pose on the map and append.
                 ego_map_poses.append(pose_record['translation'])
                 ego_map_orientation.append(yaw)
@@ -1432,13 +1486,15 @@ class NuScenesMapExplorer:
         # Render the map patch with the current ego poses.
         min_patch = np.floor(ego_map_poses.min(axis=0) - patch_margin)
         max_patch = np.ceil(ego_map_poses.max(axis=0) + patch_margin)
-        diff_patch = max_patch - min_patch
-        if any(diff_patch < min_diff_patch):
-            center_patch = (min_patch + max_patch) / 2
-            diff_patch = np.maximum(diff_patch, min_diff_patch)
-            min_patch = center_patch - diff_patch / 2
-            max_patch = center_patch + diff_patch / 2
-        my_patch = (min_patch[0], min_patch[1], max_patch[0], max_patch[1])
+        if min_x > min_patch[0]:
+            min_x = min_patch[0]
+        if min_y > min_patch[1]:
+            min_y = min_patch[1]
+        if max_x < max_patch[0]:
+            max_x = max_patch[0]
+        if max_y < max_patch[1]:
+            max_y = max_patch[1]
+        my_patch = (min_x - patch_margin, min_y - patch_margin, max_x + patch_margin, max_y + patch_margin)
         # st.write('Patch:', my_patch)
         fig, ax = self.render_map_patch(my_patch, self.map_api.non_geometric_layers, figsize=(10, 10),
                                         render_egoposes_range=render_egoposes_range,
@@ -1451,13 +1507,93 @@ class NuScenesMapExplorer:
             ax.scatter(ego_map_poses[:, 0], ego_map_poses[:, 1], s=20, c='k', alpha=1.0, zorder=2)
 
         for obj in objects:
-
-            self.draw_vehicle_rectangles(ax, objects[obj]['translation'], objects[obj]['yaw'], objects[obj]['size'][0], 'b')
+            if objects[obj]['pred']:
+                self.draw_vehicle_rectangles(ax, objects[obj]['translation'], objects[obj]['yaw'], objects[obj]['size'][0], color='yellow')
+            else:
+                self.draw_vehicle_rectangles(ax, objects[obj]['translation'], objects[obj]['yaw'], objects[obj]['size'][0], color='blue')
         plt.axis('off')
 
         if out_path is not None:
             plt.savefig(out_path, bbox_inches='tight', pad_inches=0)
 
+        return ego_map_poses, fig, ax
+    
+    def render_prediction_on_map(self,
+                                     nusc: NuScenes,
+                                     sample_token: List = None,
+                                     pred_instance: str = None,  
+                                     pred_nr: int = 0,  
+                                     pred_trajectories: List = None,
+                                     ground_truth: np.ndarray = None,
+                                     render_egoposes_range: bool = True,
+                                     render_legend: bool = True,
+                                     bitmap: Optional[BitMap] = None) -> Tuple[np.ndarray, Figure, Axes]:
+        """
+        Renders each ego pose of a list of scenes on the map (around 40 poses per scene).
+        This method is heavily inspired by NuScenes.render_egoposes_on_map(), but uses the map expansion pack maps.
+        Note that the maps are constantly evolving, whereas we only released a single snapshot of the data.
+        Therefore for some scenes there is a bad fit between ego poses and maps.
+        :param nusc: The NuScenes instance to load the ego poses from.
+        :param scene_tokens: Optional list of scene tokens corresponding to the current map location.
+        :param verbose: Whether to show status messages and progress bar.
+        :param out_path: Optional path to save the rendered figure to disk.
+        :param render_egoposes: Whether to render ego poses.
+        :param render_egoposes_range: Whether to render a rectangle around all ego poses.
+        :param render_legend: Whether to render the legend of map layers.
+        :param bitmap: Optional BitMap object to render below the other map layers.
+        :return: <np.float32: n, 2>. Returns a matrix with n ego poses in global map coordinates.
+        """
+        patch_size = np.array([50,50])
+        patch_margin = 2
+        min_diff_patch = 30
+
+        ego_map_poses = []
+        ego_map_orientation = []
+
+        i = 0
+        data = []
+        ego_vehicle_size = [1.7, 4.1, 1.6]
+
+
+        sample_record = nusc.get('sample', sample_token)
+
+        # Poses are associated with the sample_data. Here we use the lidar sample_data.
+        sample_data_record = nusc.get('sample_data', sample_record['data']['LIDAR_TOP'])
+
+        ego_pose_record = nusc.get('ego_pose', sample_data_record['ego_pose_token'])
+        yaw = Quaternion(ego_pose_record['rotation']).yaw_pitch_roll[0]
+
+        # Calculate the pose on the map and append.
+        ego_pose = np.array(ego_pose_record['translation'][:2])
+
+        min_patch = ego_pose - patch_size
+        max_patch = ego_pose + patch_size
+        my_patch = (min_patch[0], min_patch[1], max_patch[0], max_patch[1])
+        fig, ax = self.render_map_patch(my_patch, self.map_api.non_geometric_layers, figsize=(10, 10),
+                                        render_egoposes_range=render_egoposes_range,
+                                        render_legend=render_legend, bitmap=bitmap)
+        self.draw_vehicle_rectangle(ax, ego_pose, yaw, ego_vehicle_size, color='r')
+
+        for annotation in sample_record['anns']:
+            ann_data = nusc.get('sample_annotation', annotation)
+            instance = ann_data['instance_token']
+            if instance == pred_instance:
+                nr = pred_nr
+                color = "yellow"
+            else:
+                color="blue"
+                nr = -1
+
+            pose = ann_data['translation']
+            yaw = Quaternion(ann_data['rotation']).yaw_pitch_roll[0]
+            size = ann_data['size']
+            self.draw_vehicle_rectangle(ax, pose,yaw, size, color=color, pred_nr=nr)
+
+        for trajectory in pred_trajectories:
+            x, y = zip(*trajectory)
+            ax.plot(x, y, color='red', linewidth=2)
+
+        ax.plot(ground_truth[:,0], ground_truth[:,1], color='yellow', linewidth=2)
         return ego_map_poses, fig, ax
 
     def render_fancy_map_video(self,
@@ -1465,7 +1601,9 @@ class NuScenesMapExplorer:
                                      scene_token: str = None,
                                      verbose: bool = True,
                                      out_path: str = None,
-                                     render_egoposes: bool = True,
+                                     pred_instances: List = [],
+                                     pred_annotations: List = [],
+                                     pred_nrs: Dict = {},
                                      render_egoposes_range: bool = True,
                                      render_legend: bool = True,
                                      bitmap: Optional[BitMap] = None) -> Tuple[np.ndarray, Figure, Axes]:
@@ -1547,14 +1685,25 @@ class NuScenesMapExplorer:
             fig, ax = self.render_map_patch(my_patch, self.map_api.non_geometric_layers, figsize=(10, 10),
                                             render_egoposes_range=render_egoposes_range,
                                             render_legend=render_legend, bitmap=bitmap)
-            self.draw_vehicle_rectangle(ax, ego_pose, yaw, ego_vehicle_size, 'r')
+            self.draw_vehicle_rectangle(ax, ego_pose, yaw, ego_vehicle_size, color='r')
 
             for annotation in sample_record['anns']:
                 ann_data = nusc.get('sample_annotation', annotation)
+                instance = ann_data['instance_token']
+                if instance in pred_instances:
+                    pred_nr = pred_nrs[instance]
+                    if sample_token == pred_annotations[instance]:
+                        color="violet"
+                    else:
+                        color = "yellow"
+                else:
+                    color="blue"
+                    pred_nr = -1
+
                 pose = ann_data['translation']
                 yaw = Quaternion(ann_data['rotation']).yaw_pitch_roll[0]
                 size = ann_data['size']
-                self.draw_vehicle_rectangle(ax, pose,yaw, size, 'b')
+                self.draw_vehicle_rectangle(ax, pose,yaw, size, color=color, pred_nr=pred_nr)
 
             fig_path = os.path.join(out_path, f'frame_{i:02d}.png')
             fig.savefig(fig_path)
