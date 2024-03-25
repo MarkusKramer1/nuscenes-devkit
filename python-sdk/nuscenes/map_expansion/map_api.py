@@ -380,6 +380,36 @@ class NuScenesMap:
                                      render_legend = render_legend,
                                      bitmap = bitmap)
 
+    def render_dependency_graph(self,
+                                     nusc: NuScenes,
+                                     sample_token: str = None,
+                                     pred_instance: str = None,
+                                     pred_nr: int = 0,
+                                     dependencies: List = [],
+                                     render_egoposes_range: bool = True,
+                                     render_legend: bool = True,
+                                     bitmap: Optional[BitMap] = None) -> Tuple[np.ndarray, Figure, Axes]:
+        """
+        Renders each ego pose of a list of scenes on the map (around 40 poses per scene).
+        This method is heavily inspired by NuScenes.render_egoposes_on_map(), but uses the map expansion pack maps.
+        :param nusc: The NuScenes instance to load the ego poses from.
+        :param scene_tokens: Optional list of scene tokens corresponding to the current map location.
+        :param verbose: Whether to show status messages and progress bar.
+        :param out_path: Optional path to save the rendered figure to disk.
+        :param render_egoposes: Whether to render ego poses.
+        :param render_egoposes_range: Whether to render a rectangle around all ego poses.
+        :param render_legend: Whether to render the legend of map layers.
+        :param bitmap: Optional BitMap object to render below the other map layers.
+        :return: <np.float32: n, 2>. Returns a matrix with n ego poses in global map coordinates.
+        """
+        return self.explorer.render_dependency_graph(nusc = nusc,
+                                     sample_token = sample_token,
+                                     pred_instance = pred_instance,
+                                     pred_nr = pred_nr,  
+                                     dependencies=dependencies,
+                                     render_egoposes_range = render_egoposes_range,
+                                     render_legend = render_legend,
+                                     bitmap = bitmap)
 
     def render_fancy_map_video(self,
                                      nusc: NuScenes,
@@ -1595,6 +1625,86 @@ class NuScenesMapExplorer:
 
         ax.plot(ground_truth[:,0], ground_truth[:,1], color='yellow', linewidth=2)
         return ego_map_poses, fig, ax
+    
+    def render_dependency_graph(self,
+                                     nusc: NuScenes,
+                                     sample_token: List = None,
+                                     pred_instance: str = None,  
+                                     pred_nr: int = 0,  
+                                     dependencies: List = None,
+                                     render_egoposes_range: bool = True,
+                                     render_legend: bool = True,
+                                     bitmap: Optional[BitMap] = None) -> Tuple[np.ndarray, Figure, Axes]:
+        """
+        Renders each ego pose of a list of scenes on the map (around 40 poses per scene).
+        This method is heavily inspired by NuScenes.render_egoposes_on_map(), but uses the map expansion pack maps.
+        Note that the maps are constantly evolving, whereas we only released a single snapshot of the data.
+        Therefore for some scenes there is a bad fit between ego poses and maps.
+        :param nusc: The NuScenes instance to load the ego poses from.
+        :param scene_tokens: Optional list of scene tokens corresponding to the current map location.
+        :param verbose: Whether to show status messages and progress bar.
+        :param out_path: Optional path to save the rendered figure to disk.
+        :param render_egoposes: Whether to render ego poses.
+        :param render_egoposes_range: Whether to render a rectangle around all ego poses.
+        :param render_legend: Whether to render the legend of map layers.
+        :param bitmap: Optional BitMap object to render below the other map layers.
+        :return: <np.float32: n, 2>. Returns a matrix with n ego poses in global map coordinates.
+        """
+        patch_size = np.array([50,50])
+        patch_margin = 2
+        min_diff_patch = 30
+
+        ego_map_poses = []
+        ego_map_orientation = []
+
+        i = 0
+        data = []
+        ego_vehicle_size = [1.7, 4.1, 1.6]
+
+
+        sample_record = nusc.get('sample', sample_token)
+
+        # Poses are associated with the sample_data. Here we use the lidar sample_data.
+        sample_data_record = nusc.get('sample_data', sample_record['data']['LIDAR_TOP'])
+
+        ego_pose_record = nusc.get('ego_pose', sample_data_record['ego_pose_token'])
+        yaw = Quaternion(ego_pose_record['rotation']).yaw_pitch_roll[0]
+
+        # Calculate the pose on the map and append.
+        ego_pose = np.array(ego_pose_record['translation'][:2])
+
+        min_patch = ego_pose - patch_size
+        max_patch = ego_pose + patch_size
+        my_patch = (min_patch[0], min_patch[1], max_patch[0], max_patch[1])
+        fig, ax = self.render_map_patch(my_patch, self.map_api.non_geometric_layers, figsize=(10, 10),
+                                        render_egoposes_range=render_egoposes_range,
+                                        render_legend=render_legend, bitmap=bitmap)
+        self.draw_vehicle_rectangle(ax, ego_pose, yaw, ego_vehicle_size, color='r')
+
+        instance_dict = {}
+        for annotation in sample_record['anns']:
+            ann_data = nusc.get('sample_annotation', annotation)
+            instance = ann_data['instance_token']
+            if instance == pred_instance:
+                nr = pred_nr
+                color = "yellow"
+            else:
+                color="blue"
+                nr = -1
+            
+            pose = ann_data['translation']
+            instance_dict[instance] = pose
+            yaw = Quaternion(ann_data['rotation']).yaw_pitch_roll[0]
+            size = ann_data['size']
+            self.draw_vehicle_rectangle(ax, pose,yaw, size, color=color, pred_nr=nr)
+
+        for dependency in dependencies:
+            if dependency[0] in instance_dict and dependency[1] in instance_dict:
+                x = [instance_dict[dependency[0]][0], instance_dict[dependency[1]][0]]
+                y = [instance_dict[dependency[0]][1], instance_dict[dependency[1]][1]]
+                ax.plot(x, y, color='red', linewidth=2)
+        return ego_map_poses, fig, ax
+
 
     def render_fancy_map_video(self,
                                      nusc: NuScenes,

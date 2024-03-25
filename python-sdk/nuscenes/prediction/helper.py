@@ -4,6 +4,7 @@ from typing import Dict, Tuple, Any, List, Callable, Union
 
 import numpy as np
 from pyquaternion import Quaternion
+import streamlit as st
 
 from nuscenes import NuScenes
 from nuscenes.eval.common.utils import quaternion_yaw, angle_diff
@@ -325,6 +326,7 @@ class PredictHelper:
         annotation = self.get_sample_annotation(instance_token, sample_token)
 
         if annotation['prev'] == '':
+            st.write("there exists no no previous annotation")
             return np.nan
 
         prev = self.data.get('sample_annotation', annotation['prev'])
